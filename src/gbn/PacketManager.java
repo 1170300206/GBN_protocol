@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class PacketManager {
+  // window size + 1 < sequence number size
   private int WINDOWSIZE;
   // sequence size should be smaller than 255
   private final int SEQSIZE;
@@ -34,20 +35,22 @@ public class PacketManager {
 
   /**
    * Return the next sequence number
+   * 
    * @return the next sequence number
    */
   public int getNextSeq() {
     return nextSeqNum;
   }
-  
+
   /**
    * Return the base number.
+   * 
    * @return the base number
    */
   public int getBase() {
     return base;
   }
-  
+
   /**
    * Set the next sequence number.
    * 
@@ -63,16 +66,41 @@ public class PacketManager {
   }
   
   /**
+   * Return the ack state of the current sequence number
+   * @param index the sequence number
+   * @return true if the package is received
+   */
+  public boolean getACK(int index) {
+    return acks[(SEQSIZE + index-(base%SEQSIZE))%SEQSIZE];
+  }
+
+  /**
    * Set the ack = true for specific data package;
+   * 
    * @param number sequence number of the package
    */
   public void setAck(int number) {
-    int dis = (number - (base%SEQSIZE)) % SEQSIZE;
-    for(int i = base; i <= base + dis; i++) {
-      acks[i] = true;
-    }
+    acks[(SEQSIZE + number-(base%SEQSIZE))%SEQSIZE] = true;
   }
-  
+
+  /**
+   * Sliding as much as it can
+   * 
+   * @return actual steps the window went.
+   */
+  public int sliding() {
+    int steps = 0;
+    for (int i = 0; i < WINDOWSIZE; i++) {
+      if (acks[i]) {
+        steps++;
+      } else {
+        // if meet with one that are not acked yet, stop sliding
+        break;
+      }
+    }
+    return sliding(steps);
+  }
+
   /**
    * slide the window steps ahead.
    * 
@@ -80,7 +108,7 @@ public class PacketManager {
    * @return actual steps the window went.
    */
   public int sliding(int steps) {
-    //steps = (steps > PACKNUM - (base + WINDOWSIZE)) ? PACKNUM - (base + WINDOWSIZE) : steps;
+    // steps = (steps > PACKNUM - (base + WINDOWSIZE)) ? PACKNUM - (base + WINDOWSIZE) : steps;
     // shift the ack values
     for (int i = 0; i < WINDOWSIZE - steps; i++) {
       acks[i] = acks[i + steps];
@@ -89,15 +117,26 @@ public class PacketManager {
       acks[i] = false;
     }
     // ensure the window will never go over the package list
-    if(steps > PACKNUM - (base + WINDOWSIZE)) {
+    if (steps > PACKNUM - (base + WINDOWSIZE)) {
       WINDOWSIZE -= steps - (PACKNUM - (base + WINDOWSIZE));
     }
     // update the base
     base += steps;
-    System.out.println("window runs ahead " + steps + " steps, to the index " + base +", window size is " + WINDOWSIZE);
+    if(steps > 0) {
+    System.out.println("window runs ahead " + steps + " steps, to the index " + base
+        + ", window size is " + WINDOWSIZE);
+    }
     return steps;
   }
 
+  /**
+   * Return the current window size.
+   * @return the current window size
+   */
+  public int getWindowSize() {
+    return WINDOWSIZE;
+  }
+  
   /**
    * Return the data with sequence number that are begin transfered.
    * 

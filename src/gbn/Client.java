@@ -12,6 +12,7 @@ import java.util.List;
 
 public class Client {
   private final DatagramSocket socket;
+  private final int INIWINDOWSIZE = 6;
   private final int serverPort = 8388;
   private final int clientPort = 8800;
   private final int SEQSIZE = 20;
@@ -19,9 +20,15 @@ public class Client {
   private final int LENGTH = 1471;
   private final InetAddress serverAddress = InetAddress.getLocalHost();
   private final int TIMEOUT = 5000;
-  private final List<byte[]> messages;
+  private List<byte[]> messages;
+  private PacketManager manager;
+  private List<byte[]> tempWindow;
 
   public Client() throws SocketException, UnknownHostException {
+    tempWindow = new ArrayList<>();
+    for (int i = 0; i < INIWINDOWSIZE; i++) {
+      tempWindow.add(new byte[LENGTH]);
+    }
     messages = new ArrayList<byte[]>();
     socket = new DatagramSocket(clientPort);
     socket.setSoTimeout(TIMEOUT);
@@ -102,7 +109,7 @@ public class Client {
             process("-quit");
             // print all data
             int k = 0;
-            for(byte[] tmp: messages) {
+            for (byte[] tmp : messages) {
               k++;
               System.out.println("number " + k + " package is " + tmp[0]);
             }
@@ -146,10 +153,69 @@ public class Client {
     }
   }
 
+  public void sr() {
+    manager = new PacketManager(INIWINDOWSIZE, SEQSIZE, packNum, LENGTH);
+    messages = manager.data();
+    try {
+      socket.send(genPac("-testsr"));
+    } catch (IOException e1) {
+      // TODO Auto-generated catch block
+      e1.printStackTrace();
+    }
+    DatagramPacket packet = new DatagramPacket(new byte[LENGTH], LENGTH);
+    int pacRec = 0;
+    while (true) {
+      if (pacRec == packNum) {
+        // got enough package
+        process("-quit");
+        // print all data
+        int k = 0;
+        for (byte[] tmp : messages) {
+          k++;
+          System.out.println("number " + k + " package is " + tmp[0]);
+        }
+        break;
+      }
+      try {
+        socket.receive(packet);
+        // get sequence number
+        int seqNum = (int) packet.getData()[0];
+        // drop the package if it is out of the window
+        if (((SEQSIZE + seqNum - manager.getBase() % SEQSIZE) % SEQSIZE) >= manager
+            .getWindowSize()) {
+          continue;
+        }
+        if (!manager.getACK(seqNum)) {
+          // received a valid package
+          System.out.println("Client received a valid package, sequence number is " + seqNum);
+          manager.setAck(seqNum);
+          sendAck(seqNum);
+          System.out.println("sending ack: " + seqNum);
+          // append messages
+          byte[] tmp = new byte[LENGTH - 1];
+          System.arraycopy(packet.getData(), 1, tmp, 0, LENGTH - 1);
+          System.out.println("update it to the #"
+              + ((SEQSIZE + seqNum - manager.getBase() % SEQSIZE) % SEQSIZE + manager.getBase())
+              + " package");
+          messages.set(
+              (SEQSIZE + seqNum - manager.getBase() % SEQSIZE) % SEQSIZE + manager.getBase(), tmp);
+          manager.sliding();
+          pacRec++;
+        }
+      } catch (SocketTimeoutException e) {
+
+      } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+      }
+    }
+  }
+
   public static void main(String[] arg) throws SocketException, UnknownHostException {
     Client client = new Client();
     client.process("-time");
     client.process("Hello");
-    client.gbn();
+    // client.gbn();
+    client.sr();
   }
 }

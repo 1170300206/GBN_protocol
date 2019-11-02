@@ -42,14 +42,15 @@ public class Server {
   private final DateFormat dateFormat =
       new SimpleDateFormat("E, dd MMM yyyy HH:mm:ss", Locale.ENGLISH);
   // window size + 1 < sequence number size
-  private final int WINDOWSIZE = 10;
+  private final int INIWINDOWSIZE = 6;
   private final int SEQSIZE = 20;
-  private final int TIMEOUT = 10000;
+  private final int TIMEOUT = 1000;
   private List<byte[]> data;
   private PacketManager manager;
   private int count;
   private final int MAXCOUNT = 5;
   private final double lostRate = 0.3;
+  private final int[] srCount;
 
   /**
    * Initiate the server's socket
@@ -60,6 +61,10 @@ public class Server {
     // create the server's socket
     socket = new DatagramSocket(serverPort);
     socket.setSoTimeout(TIMEOUT);
+    srCount = new int[SEQSIZE];
+    for (int i = 0; i < SEQSIZE; i++) {
+      srCount[i] = 0;
+    }
     System.out.println("Start a server process");
   }
 
@@ -92,10 +97,14 @@ public class Server {
     // get query from received data
     String query = new String(packet.getData(), 0, packet.getLength());
     if (query.equals("-testgbn")) {
-      manager = new PacketManager(WINDOWSIZE, SEQSIZE, packNum, LENGTH);
+      manager = new PacketManager(INIWINDOWSIZE, SEQSIZE, packNum, LENGTH);
       data = manager.data();
       // start to test gbn
       state = 1;
+    } else if (query.equals("-testsr")) {
+      manager = new PacketManager(INIWINDOWSIZE, SEQSIZE, packNum, LENGTH);
+      data = manager.data();
+      state = 2;
     } else if (query.equals("-time")) {
       // send time to the client
       String times = dateFormat.format(new Date());
@@ -145,14 +154,31 @@ public class Server {
     // reset timer
     count = 0;
   }
+  
+  /**
+   * Send specific package
+   * @param number the index number of the package
+   */
+  public void timeout(int number) {
+    DatagramPacket sendingPacket = genPac(data.get(number));
+    try {
+      socket.send(sendingPacket);
+      System.out.println("Resend packet #" + number + ", sequence number is " + number % SEQSIZE);
+    } catch (IOException e) {
+      // TODO Auto-generated catch block
+      e.printStackTrace();
+    }
+    // reset the timer
+    srCount[number%SEQSIZE] = 0;
+  }
 
   /**
    * Sending all available package in the waiting list.
    */
   public void send() {
-    for (int i = manager.getNextSeq(); i < manager.getBase() + WINDOWSIZE; i++) {
+    for (int i = manager.getNextSeq(); i < manager.getBase() + manager.getWindowSize(); i++) {
       // start counting when the base is equal to getNextSeq
-      if(manager.getNextSeq() == manager.getBase()) {
+      if (manager.getNextSeq() == manager.getBase()) {
         count = 0;
       }
       manager.setNextSeq(manager.getNextSeq() + 1);
@@ -221,6 +247,64 @@ public class Server {
     }
   }
 
+  public void srCountChange() {
+    for (int i = manager.getBase(); i < manager.getBase() + manager.getWindowSize(); i++) {
+      if(!manager.getACK(i%SEQSIZE)) {
+        srCount[i%SEQSIZE]++;
+        if(srCount[i%SEQSIZE] == MAXCOUNT) {
+          timeout(i);
+        }
+      }
+    }
+  }
+
+  /**
+   * Start to test through sr
+   * 
+   * @throws InterruptedException
+   */
+  public void sr() {
+    while (true) {
+      // there is still package that can be sent
+      if (manager.getNextSeq() < packNum) {
+        send();
+      }
+      packet = new DatagramPacket(new byte[LENGTH], LENGTH);
+      try {
+        socket.receive(packet);
+        byte seqNum = packet.getData()[0];
+        if(!manager.getACK(seqNum)) {
+          manager.setAck(seqNum);
+          // reset timer
+          srCount[seqNum] = 0;
+          System.out.println("Server received valid ack " + seqNum);
+          manager.sliding();
+        }
+        srCountChange();
+        if (manager.getBase() == packNum) {
+          System.out.println("transfer over");
+          // stop sr mode
+          state = 0;
+          break;
+        }
+      } catch (SocketTimeoutException e) {
+        System.out.println("Server receiving ack time out, count + 1");
+        srCountChange();
+      } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+      }
+      try {
+        Thread.sleep(1000);
+      } catch (InterruptedException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+      }
+    }
+  }
+
+
+
   public void process() {
     while (true) {
       try {
@@ -233,13 +317,15 @@ public class Server {
         System.out.println("receive package from " + clientAddress + ", port: " + clientPort);
         if (state == 0) {
           // process before start to transfer data
-          if(!response()) {
+          if (!response()) {
             break;
           }
         }
-        // if state changed after process, goes to the data transfer mode
+        // if state changed after process, goes to the data transfer mode GBN or SR
         if (state == 1) {
           gbn();
+        } else if (state == 2) {
+          sr();
         }
       } catch (SocketTimeoutException e) {
         continue;
